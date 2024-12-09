@@ -302,35 +302,39 @@ class OnlineDPOTrainer(Trainer):
             return self._beta
 
     @staticmethod
-    def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase, max_completion_length:int) -> dict[str, Any]:
+    def tokenize_row(feature, is_encoder_decoder: bool, tokenizer: PreTrainedTokenizerBase, max_completion_length) -> dict[str, Any]:
         """Tokenize a single row from a DPO specific dataset."""
 
-        prompt_input_ids = tokenizer(feature["prompt"], add_special_tokens=False)["input_ids"]
-        chosen_input_ids = tokenizer(feature["chosen"], add_special_tokens=False)["input_ids"]
+        prompt_batch = tokenizer(feature["prompt"], add_special_tokens=False)
+        chosen_batch = tokenizer(feature["chosen"], add_special_tokens=False)
 
         if is_encoder_decoder:
             # Add BOS token to head of prompt. Avoid adding if it's already there
             if tokenizer.bos_token_id is not None:
-                prompt_len_input_ids = len(prompt_input_ids)
-                if prompt_len_input_ids == 0 or tokenizer.bos_token_id != batch["input_ids"][0]:
-                    prompt_input_ids = [tokenizer.bos_token_id] + prompt_input_ids
+                prompt_len_input_ids = len(prompt_batch["input_ids"])
+                if prompt_len_input_ids == 0 or tokenizer.bos_token_id != prompt_batch["input_ids"][0]:
+                    prompt_batch["input_ids"] = [tokenizer.bos_token_id] + prompt_batch["input_ids"]
+                    prompt_batch["attention_mask"] = [1] + prompt_batch["attention_mask"]
             if tokenizer.eos_token_id is not None:
-                prompt_input_ids = prompt_input_ids + [tokenizer.eos_token_id]
+                prompt_batch["input_ids"] = prompt_batch["input_ids"] + [tokenizer.eos_token_id]
+                prompt_batch["attention_mask"] = prompt_batch["attention_mask"] + [1]
 
-        chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-
-        # Truncate completion sequences
+        # Truncate chosen sequences
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token_id = tokenizer.eos_token_id
         if max_completion_length is not None:
-            chosen_input_ids = chosen_input_ids[:max_completion_length]
-        
-        prompt_attention_mask = [torch.ones_like(input_ids) for input_ids in prompt_input_ids]
-        chosen_attention_mask = [torch.ones_like(input_ids) for input_ids in chosen_input_ids]
-        
+            if len(chosen_batch["input_ids"]) < max_completion_length:
+                chosen_batch["input_ids"] = chosen_batch["input_ids"] + [tokenizer.eos_token_id] + [tokenizer.pad_token_id] * (max_completion_length - len(chosen_batch["input_ids"])-1)
+                chosen_batch["attention_mask"] = chosen_batch["attention_mask"] + [1] + [0] * (max_completion_length - len(chosen_batch["attention_mask"])- 1)
+            else:
+                chosen_batch["input_ids"] = chosen_batch["input_ids"][:max_completion_length]
+                chosen_batch["attention_mask"] = chosen_batch["attention_mask"][:max_completion_length]
+    
         return {
-            "prompt_input_ids": prompt_input_ids,
-            "prompt_attention_mask": prompt_attention_mask,
-            "chosen_input_ids": chosen_input_ids,
-            "chosen_attention_mask": chosen_attention_mask
+            "prompt_input_ids": prompt_batch["input_ids"],
+            "prompt_attention_mask": prompt_batch["attention_mask"],
+            "chosen_input_ids": chosen_batch["input_ids"],
+            "chosen_attention_mask": chosen_batch["attention_mask"]
         }
     
         # # Original online dpo version:
@@ -454,20 +458,39 @@ class OnlineDPOTrainer(Trainer):
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
         inputs = self._prepare_inputs(inputs)
         num_examples, context_length = inputs["prompt_input_ids"].shape
-        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
-        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
+        prompt_ids = inputs["prompt_input_ids"]
+        prompt_mask = inputs["prompt_attention_mask"]
         with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
             output = unwrapped_model.generate(
                 input_ids=prompt_ids,
                 attention_mask=prompt_mask,
                 generation_config=self.generation_config,
             )
-        del inputs
+        # augment prompts
+        # before: [promt_1, promt_2]
+        # after: [promt_1, promt_2, promt_1, promt_2]
+        prompt_ids = prompt_ids.repeat(2, 1)
+        prompt_mask = prompt_mask.repeat(2, 1)
+
 
         completion_ids = output[:, context_length:]
         completion_ids, completion_mask = truncate_right(
             completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
+
+        # augment completions
+        # before: [1_1, 2_1]
+        # after: [1_1, 1_1, 2_1, 2_1]
+        completion_ids = completion_ids.repeat_interleave(2, dim=0)
+        completion_mask = completion_mask.repeat_interleave(2, dim=0)
+
+        # insert the chosen, align all the completions to (_, max_new_tokens)
+        # before: [1_1, 1_1, 2_1, 2_1]
+        # after: [1_1, 1_chosen, 2_1, 2_chosen]
+        completion_ids[1::2, :] = inputs["chosen_input_ids"]
+        completion_mask[1::2, :] = inputs["chosen_attention_mask"]
+
+        del inputs
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
         prompt_completion_ids = torch.cat((prompt_ids, completion_ids), dim=1)
         prompt_completion_mask = torch.cat((prompt_mask, completion_mask), dim=1)

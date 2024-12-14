@@ -85,9 +85,9 @@ if is_wandb_available():
 logger = logging.get_logger(__name__)
 
 
-class OnlineDPOTrainer(Trainer):
+class NewOnlineDPOTrainer(Trainer):
     r"""
-    Initialize OnlineDPOTrainer.
+    Initialize NewOnlineDPOTrainer.
 
     Args:
         model (`transformers.PreTrainedModel` or `torch.nn.Module`):
@@ -336,36 +336,6 @@ class OnlineDPOTrainer(Trainer):
             "chosen_input_ids": chosen_batch["input_ids"],
             "chosen_attention_mask": chosen_batch["attention_mask"]
         }
-    
-        # # Original online dpo version:
-        # if not is_encoder_decoder:
-        #     batch = tokenizer(feature["prompt"], add_special_tokens=False)
-        #     # Add BOS token to head of prompt. Avoid adding if it's already there
-        #     if tokenizer.bos_token_id is not None:
-        #         prompt_len_input_ids = len(batch["input_ids"])
-        #         if prompt_len_input_ids == 0 or tokenizer.bos_token_id != batch["input_ids"][0]:
-        #             batch["input_ids"] = [tokenizer.bos_token_id] + batch["input_ids"]
-        #             batch["attention_mask"] = [1] + batch["attention_mask"]
-        # else:
-        #     batch = tokenizer(feature["prompt"], add_special_tokens=True)
-        # prompt_input_ids = batch["input_ids"]
-        # prompt_attention_mask = batch["attention_mask"]
-
-        # chosen_input_ids = tokenizer(feature["chosen"], add_special_tokens=False)["input_ids"]
-        # chosen_input_ids = chosen_input_ids + [tokenizer.eos_token_id]
-
-        # # Truncate completion sequences
-        # if max_completion_length is not None:
-        #     chosen_input_ids = chosen_input_ids[:max_completion_length]
-        
-        # chosen_attention_mask = [torch.ones_like(input_ids) for input_ids in chosen_input_ids]
-        
-        # return {
-        #     "prompt_input_ids": prompt_input_ids,
-        #     "prompt_attention_mask": prompt_attention_mask,
-        #     "chosen_input_ids": chosen_input_ids,
-        #     "chosen_attention_mask": chosen_attention_mask
-        # }
 
     # Same as Trainer.get_train_dataloader but skip the "remove_unused_columns".
     @wraps(Trainer.get_train_dataloader)

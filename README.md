@@ -45,18 +45,18 @@ pip install trl
 
 ### From source
 
-If you want to use the latest features before an official release, you can install TRL from source:
+If you want to use the latest features, you can install TRL from source:
 
 ```bash
-pip install git+https://github.com/huggingface/trl.git
+pip install git+https://github.com/yujiagao-audrey/trl_oai.git
 ```
 
 ### Repository
 
-If you want to use the examples you can clone the repository with the following command:
+If you want to use the examples or use the GenAI-CBSSA-main directory implementation you can clone the repository with the following command:
 
 ```bash
-git clone https://github.com/huggingface/trl.git
+git clone https://github.com/yujiagao-audrey/trl_oai.git
 ```
 
 ## Command Line Interface (CLI)

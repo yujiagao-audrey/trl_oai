@@ -87,7 +87,7 @@ logger = logging.get_logger(__name__)
 
 class NewOnlineDPOTrainer(Trainer):
     r"""
-    Initialize NewOnlineDPOTrainer.
+    Initialize OnlineDPOTrainer.
 
     Args:
         model (`transformers.PreTrainedModel` or `torch.nn.Module`):
@@ -157,8 +157,6 @@ class NewOnlineDPOTrainer(Trainer):
             )
 
         self.ref_model = ref_model
-
-        self.max_new_tokens = args.max_new_tokens
 
         if reward_model is not None and judge is not None:
             warnings.warn(
@@ -419,10 +417,9 @@ class NewOnlineDPOTrainer(Trainer):
         # We do this on-the-fly to enable the use of reward models and policies with different tokenizers / chat templates.
         batch_size = len(next(iter(inputs.values())))
         prompts = inputs["prompt"]
-        chosen = inputs["chosen"]
         inputs = [{k: v[i] for k, v in inputs.items()} for i in range(batch_size)]
         inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
-        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class, self.max_new_tokens) for x in inputs]
+        inputs = [self.tokenize_row(x, self.model.config.is_encoder_decoder, self.processing_class, max_completion_length=self.generation_config.max_new_tokens) for x in inputs]
         inputs = self.data_collator(inputs)
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
@@ -442,23 +439,20 @@ class NewOnlineDPOTrainer(Trainer):
         prompt_ids = prompt_ids.repeat(2, 1)
         prompt_mask = prompt_mask.repeat(2, 1)
 
-
         completion_ids = output[:, context_length:]
         completion_ids, completion_mask = truncate_right(
             completion_ids, self.processing_class.eos_token_id, self.processing_class.pad_token_id
         )
-
         # augment completions
         # before: [1_1, 2_1]
         # after: [1_1, 1_1, 2_1, 2_1]
         completion_ids = completion_ids.repeat_interleave(2, dim=0)
         completion_mask = completion_mask.repeat_interleave(2, dim=0)
-
         # insert the chosen, align all the completions to (_, max_new_tokens)
         # before: [1_1, 1_1, 2_1, 2_1]
         # after: [1_1, 1_chosen, 2_1, 2_chosen]
         completion_ids[1::2, :] = inputs["chosen_input_ids"]
-        completion_mask[1::2, :] = inputs["chosen_attention_mask"]
+        completion_mask[1::2, :] = inputs["chosen_attention_mask"]    
 
         del inputs
         contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
